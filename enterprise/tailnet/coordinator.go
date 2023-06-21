@@ -49,6 +49,14 @@ func NewCoordinator(logger slog.Logger, ps pubsub.Pubsub) (agpl.Coordinator, err
 	return coord, nil
 }
 
+func (c *haCoordinator) SubscribeAgent(agentID uuid.UUID, cb func(agentID uuid.UUID, node *agpl.Node)) func() {
+	panic("not implemented") // TODO: Implement
+}
+
+func (c *haCoordinator) BroadcastToAgents(agents []uuid.UUID, node *agpl.Node) error {
+	panic("not implemented") // TODO: Implement
+}
+
 type haCoordinator struct {
 	id        uuid.UUID
 	log       slog.Logger

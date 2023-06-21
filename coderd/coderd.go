@@ -38,6 +38,7 @@ import (
 
 	// Used for swagger docs.
 	_ "github.com/coder/coder/coderd/apidoc"
+	"github.com/coder/coder/coderd/wsconncache"
 
 	"cdr.dev/slog"
 	"github.com/coder/coder/buildinfo"
@@ -60,7 +61,6 @@ import (
 	"github.com/coder/coder/coderd/updatecheck"
 	"github.com/coder/coder/coderd/util/slice"
 	"github.com/coder/coder/coderd/workspaceapps"
-	"github.com/coder/coder/coderd/wsconncache"
 	"github.com/coder/coder/codersdk"
 	"github.com/coder/coder/codersdk/agentsdk"
 	"github.com/coder/coder/provisionerd/proto"
@@ -353,6 +353,7 @@ func New(options *Options) *API {
 	api.Auditor.Store(&options.Auditor)
 	api.workspaceAgentCache = wsconncache.New(api.dialWorkspaceAgentTailnet, 0)
 	api.TailnetCoordinator.Store(&options.TailnetCoordinator)
+	api.tailnet = newServerTailnet(api.ctx, options.Logger, options.DERPServer, options.DERPMap, &api.TailnetCoordinator)
 
 	api.workspaceAppServer = &workspaceapps.Server{
 		Logger: options.Logger.Named("workspaceapps"),
@@ -878,6 +879,7 @@ type API struct {
 	updateChecker         *updatecheck.Checker
 	WorkspaceAppsProvider workspaceapps.SignedTokenProvider
 	workspaceAppServer    *workspaceapps.Server
+	tailnet               *serverTailnet
 
 	// Experiments contains the list of experiments currently enabled.
 	// This is used to gate features that are not yet ready for production.
@@ -904,7 +906,8 @@ func (api *API) Close() error {
 	if coordinator != nil {
 		_ = (*coordinator).Close()
 	}
-	return api.workspaceAgentCache.Close()
+	_ = api.tailnet
+	return nil
 }
 
 func compressHandler(h http.Handler) http.Handler {

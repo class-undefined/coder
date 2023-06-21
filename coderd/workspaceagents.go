@@ -653,7 +653,7 @@ func (api *API) workspaceAgentListeningPorts(rw http.ResponseWriter, r *http.Req
 		return
 	}
 
-	agentConn, release, err := api.workspaceAgentCache.Acquire(workspaceAgent.ID)
+	agentConn, err := api.tailnet.AgentConn(ctx, workspaceAgent.ID)
 	if err != nil {
 		httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
 			Message: "Internal error dialing workspace agent.",
@@ -661,7 +661,6 @@ func (api *API) workspaceAgentListeningPorts(rw http.ResponseWriter, r *http.Req
 		})
 		return
 	}
-	defer release()
 
 	portsResponse, err := agentConn.ListeningPorts(ctx)
 	if err != nil {
@@ -763,14 +762,13 @@ func (api *API) dialWorkspaceAgentTailnet(agentID uuid.UUID) (*codersdk.Workspac
 		return nil
 	})
 	conn.SetNodeCallback(sendNodes)
-	agentConn := &codersdk.WorkspaceAgentConn{
-		Conn: conn,
+	agentConn := codersdk.NewWorkspaceAgentConn(conn, codersdk.WorkspaceAgentConnOptions{
 		CloseFunc: func() {
 			cancel()
 			_ = clientConn.Close()
 			_ = serverConn.Close()
 		},
-	}
+	})
 	go func() {
 		err := (*api.TailnetCoordinator.Load()).ServeClient(serverConn, uuid.New(), agentID)
 		if err != nil {
