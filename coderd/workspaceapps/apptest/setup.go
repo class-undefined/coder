@@ -393,7 +393,8 @@ func doWithRetries(t require.TestingT, client *codersdk.Client, req *http.Reques
 	return resp, err
 }
 
-func requestWithRetries(ctx context.Context, t require.TestingT, client *codersdk.Client, method, urlOrPath string, body interface{}, opts ...codersdk.RequestOption) (*http.Response, error) {
+func requestWithRetries(ctx context.Context, t testing.TB, client *codersdk.Client, method, urlOrPath string, body interface{}, opts ...codersdk.RequestOption) (*http.Response, error) {
+	t.Helper()
 	var resp *http.Response
 	var err error
 	require.Eventually(t, func() bool {
@@ -406,7 +407,7 @@ func requestWithRetries(ctx context.Context, t require.TestingT, client *codersd
 			return false
 		}
 		return true
-	}, testutil.WaitLong, testutil.IntervalFast)
+	}, testutil.WaitLong, testutil.IntervalSlow)
 	return resp, err
 }
 

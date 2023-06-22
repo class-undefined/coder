@@ -139,6 +139,10 @@ func (c *pgCoord) Node(id uuid.UUID) *agpl.Node {
 	return bestN
 }
 
+func (c *pgCoord) NodeCount() int {
+	return 69
+}
+
 func (c *pgCoord) ServeClient(conn net.Conn, id uuid.UUID, agent uuid.UUID) error {
 	defer func() {
 		err := conn.Close()

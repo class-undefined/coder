@@ -60,6 +60,10 @@ var nonCanonicalHeaders = map[string]string{
 	"Sec-Websocket-Version":    "Sec-WebSocket-Version",
 }
 
+type ReverseProxyProvider interface {
+	ReverseProxy(targetURL, dashboardURL *url.URL, agentID uuid.UUID) *httputil.ReverseProxy
+}
+
 // Server serves workspace apps endpoints, including:
 // - Path-based apps
 // - Subdomain app middleware
@@ -93,6 +97,8 @@ type Server struct {
 	// calls to the dashboard are not possible due to CORs.
 	DisablePathApps  bool
 	SecureAuthCookie bool
+
+	ReverseProxyProvider ReverseProxyProvider
 
 	websocketWaitMutex sync.Mutex
 	websocketWaitGroup sync.WaitGroup
@@ -516,30 +522,7 @@ func (s *Server) proxyWorkspaceApp(rw http.ResponseWriter, r *http.Request, appT
 	r.URL.Path = path
 	appURL.RawQuery = ""
 
-	proxy := httputil.NewSingleHostReverseProxy(appURL)
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		site.RenderStaticErrorPage(rw, r, site.ErrorPageData{
-			Status:       http.StatusBadGateway,
-			Title:        "Bad Gateway",
-			Description:  "Failed to proxy request to application: " + err.Error(),
-			RetryEnabled: true,
-			DashboardURL: s.DashboardURL.String(),
-		})
-	}
-
-	conn, release, err := s.WorkspaceConnCache.Acquire(appToken.AgentID)
-	if err != nil {
-		site.RenderStaticErrorPage(rw, r, site.ErrorPageData{
-			Status:       http.StatusBadGateway,
-			Title:        "Bad Gateway",
-			Description:  "Could not connect to workspace agent: " + err.Error(),
-			RetryEnabled: true,
-			DashboardURL: s.DashboardURL.String(),
-		})
-		return
-	}
-	defer release()
-	proxy.Transport = conn.HTTPTransport()
+	proxy := s.ReverseProxyProvider.ReverseProxy(appURL, s.DashboardURL, appToken.AgentID)
 
 	// This strips the session token from a workspace app request.
 	cookieHeaders := r.Header.Values("Cookie")[:]

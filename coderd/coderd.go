@@ -351,9 +351,15 @@ func New(options *Options) *API {
 	}
 
 	api.Auditor.Store(&options.Auditor)
-	api.workspaceAgentCache = wsconncache.New(api.dialWorkspaceAgentTailnet, 0)
+	// api.workspaceAgentCache = wsconncache.New(api.dialWorkspaceAgentTailnet, 0)
 	api.TailnetCoordinator.Store(&options.TailnetCoordinator)
-	api.tailnet = newServerTailnet(api.ctx, options.Logger, options.DERPServer, options.DERPMap, &api.TailnetCoordinator)
+	api.tailnet = newServerTailnet(api.ctx,
+		options.Logger,
+		options.DERPServer,
+		options.DERPMap,
+		&api.TailnetCoordinator,
+		wsconncache.New(api.dialWorkspaceAgentTailnet, 0),
+	)
 
 	api.workspaceAppServer = &workspaceapps.Server{
 		Logger: options.Logger.Named("workspaceapps"),
@@ -364,9 +370,9 @@ func New(options *Options) *API {
 		HostnameRegex: api.AppHostnameRegex,
 		RealIPConfig:  options.RealIPConfig,
 
-		SignedTokenProvider: api.WorkspaceAppsProvider,
-		WorkspaceConnCache:  api.workspaceAgentCache,
-		AppSecurityKey:      options.AppSecurityKey,
+		SignedTokenProvider:  api.WorkspaceAppsProvider,
+		ReverseProxyProvider: api.tailnet,
+		AppSecurityKey:       options.AppSecurityKey,
 
 		DisablePathApps:  options.DeploymentValues.DisablePathApps.Value(),
 		SecureAuthCookie: options.DeploymentValues.SecureAuthCookie.Value(),
@@ -874,8 +880,8 @@ type API struct {
 	WebsocketWaitGroup sync.WaitGroup
 	derpCloseFunc      func()
 
-	metricsCache          *metricscache.Cache
-	workspaceAgentCache   *wsconncache.Cache
+	metricsCache *metricscache.Cache
+	// workspaceAgentCache   *wsconncache.Cache
 	updateChecker         *updatecheck.Checker
 	WorkspaceAppsProvider workspaceapps.SignedTokenProvider
 	workspaceAppServer    *workspaceapps.Server
@@ -906,7 +912,7 @@ func (api *API) Close() error {
 	if coordinator != nil {
 		_ = (*coordinator).Close()
 	}
-	_ = api.tailnet
+	_ = api.tailnet.Close()
 	return nil
 }
 

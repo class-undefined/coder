@@ -1,4 +1,5 @@
 // Package wsconncache caches workspace agent connections by UUID.
+// DEPRECATED
 package wsconncache
 
 import (
@@ -15,11 +16,13 @@ import (
 	"github.com/coder/coder/codersdk"
 )
 
-// New creates a new workspace connection cache that closes
-// connections after the inactive timeout provided.
+// New creates a new workspace connection cache that closes connections after
+// the inactive timeout provided.
 //
-// Agent connections are cached due to WebRTC negotiation
-// taking a few hundred milliseconds.
+// Agent connections are cached due to Wireguard negotiation taking a few
+// hundred milliseconds, depending on latency.
+//
+// DEPRECATED: coderd now runs its own tailnet.
 func New(dialer Dialer, inactiveTimeout time.Duration) *Cache {
 	if inactiveTimeout == 0 {
 		inactiveTimeout = 5 * time.Minute

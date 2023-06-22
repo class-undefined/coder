@@ -3,9 +3,12 @@ package coderd
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -17,6 +20,7 @@ import (
 	"tailscale.com/tailcfg"
 
 	"cdr.dev/slog"
+	"github.com/coder/coder/coderd/wsconncache"
 	"github.com/coder/coder/codersdk"
 	"github.com/coder/coder/tailnet"
 )
@@ -37,6 +41,7 @@ func newServerTailnet(
 	derpServer *derp.Server,
 	derpMap *tailcfg.DERPMap,
 	coord *atomic.Pointer[tailnet.Coordinator],
+	cache *wsconncache.Cache,
 ) *serverTailnet {
 	conn, err := tailnet.NewConn(&tailnet.Options{
 		Addresses: []netip.Prefix{netip.PrefixFrom(tailnet.IP(), 128)},
@@ -51,6 +56,8 @@ func newServerTailnet(
 		logger:      logger,
 		conn:        conn,
 		coordinator: coord,
+		cache:       cache,
+		agentNodes:  map[uuid.UUID]*tailnetNode{},
 		transport:   defaultTransport.Clone(),
 	}
 	tn.transport.DialContext = tn.dialContext
@@ -70,9 +77,8 @@ func newServerTailnet(
 	})
 
 	// This is set to allow local DERP traffic to be proxied through memory
-	// instead of needing to hit the external access URL.
-	// Don't use the ctx given in this callback, it's only valid while
-	// connecting.
+	// instead of needing to hit the external access URL. Don't use the ctx
+	// given in this callback, it's only valid while connecting.
 	conn.SetDERPRegionDialer(func(_ context.Context, region *tailcfg.DERPRegion) net.Conn {
 		if !region.EmbeddedRelay {
 			return nil
@@ -100,6 +106,7 @@ type serverTailnet struct {
 	logger      slog.Logger
 	conn        *tailnet.Conn
 	coordinator *atomic.Pointer[tailnet.Coordinator]
+	cache       *wsconncache.Cache
 	nodesMu     sync.Mutex
 	// agentNodes is a map of agent tailnetNodes the server wants to keep a
 	// connection to.
@@ -119,26 +126,45 @@ func (s *serverTailnet) updateNode(id uuid.UUID, node *tailnet.Node) {
 	if ok {
 		err := s.conn.UpdateNodes([]*tailnet.Node{node}, false)
 		if err != nil {
-			s.logger.Error(context.Background(), "update node", slog.Error(err))
+			s.logger.Error(context.Background(), "update node ..................... t", slog.Error(err))
 			return
 		}
 	}
 }
 
-func (s *serverTailnet) gatherNodes() []*tailnet.Node {
-	nodes := make([]*tailnet.Node, 0, len(s.agentNodes))
-	for _, node := range s.agentNodes {
-		nodes = append(nodes, node.node)
-	}
+// func (s *serverTailnet) gatherNodes() []*tailnet.Node {
+// 	nodes := make([]*tailnet.Node, 0, len(s.agentNodes))
+// 	for _, node := range s.agentNodes {
+// 		nodes = append(nodes, node.node)
+// 	}
 
-	return nodes
+// 	return nodes
+// }
+
+func (s *serverTailnet) ReverseProxy(targetURL, dashboardURL *url.URL, agentID uuid.UUID) *httputil.ReverseProxy {
+	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprint(w, "ERROR HAPPENED", err.Error())
+		// site.RenderStaticErrorPage(w, r, site.ErrorPageData{
+		// 	Status:       http.StatusBadGateway,
+		// 	Title:        "Bad Gateway",
+		// 	Description:  "Failed to proxy request to application: " + err.Error(),
+		// 	RetryEnabled: true,
+		// 	DashboardURL: dashboardURL.String(),
+		// })
+	}
+	proxy.Director = s.director(agentID, proxy.Director)
+	proxy.Transport = s.transport
+
+	return proxy
 }
 
 type agentIDKey struct{}
 
-func (*serverTailnet) Director(id uuid.UUID, prev func(req *http.Request)) func(req *http.Request) {
+func (*serverTailnet) director(agentID uuid.UUID, prev func(req *http.Request)) func(req *http.Request) {
 	return func(req *http.Request) {
-		ctx := context.WithValue(req.Context(), agentIDKey{}, id)
+		ctx := context.WithValue(req.Context(), agentIDKey{}, agentID)
 		*req = *req.WithContext(ctx)
 		prev(req)
 	}
@@ -150,7 +176,6 @@ func (s *serverTailnet) dialContext(ctx context.Context, network, addr string) (
 		return nil, xerrors.Errorf("no agent id attached")
 	}
 
-	_ = net.Dialer{}
 	return s.DialAgentNetConn(ctx, agentID, network, addr)
 }
 
@@ -162,9 +187,9 @@ func (s *serverTailnet) getNode(agentID uuid.UUID) (*tailnet.Node, error) {
 		coord := *s.coordinator.Load()
 		_node := coord.Node(agentID)
 		// The coordinator doesn't have the node either. Nothing we can do here.
-		if node == nil {
+		if _node == nil {
 			s.nodesMu.Unlock()
-			return nil, xerrors.Errorf("node %q not found", agentID.String())
+			return nil, xerrors.Errorf("node %q not found; total %d nodes", agentID.String())
 		}
 		stop := coord.SubscribeAgent(agentID, s.updateNode)
 		node = &tailnetNode{
@@ -176,6 +201,11 @@ func (s *serverTailnet) getNode(agentID uuid.UUID) (*tailnet.Node, error) {
 	}
 	s.nodesMu.Unlock()
 
+	if len(node.node.Addresses) == 0 {
+		return nil, xerrors.New("agent has no reachable addresses")
+	}
+
+	// if we didn't already have the node locally, add it to our tailnet.
 	if !ok {
 		err := s.conn.UpdateNodes([]*tailnet.Node{node.node}, false)
 		if err != nil {
@@ -183,25 +213,26 @@ func (s *serverTailnet) getNode(agentID uuid.UUID) (*tailnet.Node, error) {
 		}
 	}
 
-	if len(node.node.Addresses) == 0 {
-		return nil, xerrors.New("agent has no reachable addresses")
-	}
-
 	return node.node, nil
 }
 
-func (s *serverTailnet) AgentConn(ctx context.Context, agentID uuid.UUID) (*codersdk.WorkspaceAgentConn, error) {
+func (s *serverTailnet) AgentConn(_ context.Context, agentID uuid.UUID) (*codersdk.WorkspaceAgentConn, error) {
 	return codersdk.NewWorkspaceAgentConn(s.conn, codersdk.WorkspaceAgentConnOptions{
 		AgentID: agentID,
 		GetNode: s.getNode,
+		// TODO: close ticket
+		CloseFunc: func() {},
 	}), nil
 }
 
 func (s *serverTailnet) DialAgentNetConn(ctx context.Context, agentID uuid.UUID, network, addr string) (net.Conn, error) {
+	fmt.Println("DIAL AGENT", agentID)
 	node, err := s.getNode(agentID)
 	if err != nil {
 		return nil, err
 	}
+
+	fmt.Println("GOT NODE", node)
 
 	_, rawPort, _ := net.SplitHostPort(addr)
 	port, _ := strconv.ParseUint(rawPort, 10, 16)
@@ -216,11 +247,8 @@ func (s *serverTailnet) DialAgentNetConn(ctx context.Context, agentID uuid.UUID,
 	}
 }
 
-func (s *serverTailnet) Transport() *http.Transport {
-	return s.transport
-}
-
 func (s *serverTailnet) Close() error {
 	s.conn.Close()
+	s.transport.CloseIdleConnections()
 	return nil
 }

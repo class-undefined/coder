@@ -763,6 +763,12 @@ func (api *API) dialWorkspaceAgentTailnet(agentID uuid.UUID) (*codersdk.Workspac
 	})
 	conn.SetNodeCallback(sendNodes)
 	agentConn := codersdk.NewWorkspaceAgentConn(conn, codersdk.WorkspaceAgentConnOptions{
+		AgentID: agentID,
+		GetNode: func(agentID uuid.UUID) (*tailnet.Node, error) {
+			return &tailnet.Node{
+				Addresses: []netip.Prefix{netip.PrefixFrom(codersdk.WorkspaceAgentIP, 128)},
+			}, nil
+		},
 		CloseFunc: func() {
 			cancel()
 			_ = clientConn.Close()

@@ -16,6 +16,7 @@ import (
 
 	"cdr.dev/slog"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/google/uuid"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"golang.org/x/exp/slices"
@@ -35,6 +36,7 @@ type Coordinator interface {
 	ServeHTTPDebug(w http.ResponseWriter, r *http.Request)
 	// Node returns an in-memory node by ID.
 	Node(id uuid.UUID) *Node
+	NodeCount() int
 	// ServeClient accepts a WebSocket connection that wants to connect to an agent
 	// with the specified ID.
 	ServeClient(conn net.Conn, id uuid.UUID, agent uuid.UUID) error
@@ -175,6 +177,7 @@ func newCore(logger slog.Logger) *core {
 		agentSockets:             map[uuid.UUID]*TrackedConn{},
 		agentToConnectionSockets: map[uuid.UUID]map[uuid.UUID]*TrackedConn{},
 		agentNameCache:           nameCache,
+		agentCallbacks:           map[uuid.UUID]map[uuid.UUID]func(uuid.UUID, *Node){},
 	}
 }
 
@@ -305,7 +308,10 @@ func (c *core) node(id uuid.UUID) *Node {
 }
 
 func (c *coordinator) NodeCount() int {
-	return c.core.nodeCount()
+	c.core.mutex.Lock()
+	spew.Dump(c.core.nodes)
+	c.core.mutex.Unlock()
+	return c.core.agentCount()
 }
 
 func (c *core) nodeCount() int {
@@ -809,6 +815,10 @@ func (c *coordinator) SubscribeAgent(agentID uuid.UUID, cb func(agentID uuid.UUI
 
 func (c *coordinator) BroadcastToAgents(agents []uuid.UUID, node *Node) error {
 	ctx := context.Background()
+
+	// c.core.mutex.Lock()
+	// c.core.nodes
+	// c.core.mutex.Unlock()
 	for _, id := range agents {
 		c.core.mutex.Lock()
 		agentSocket, ok := c.core.agentSockets[id]
