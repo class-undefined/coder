@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/xerrors"
+	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"tailscale.com/derp"
 	"tailscale.com/tailcfg"
 
@@ -229,10 +230,27 @@ func (s *serverTailnet) AgentConn(_ context.Context, agentID uuid.UUID) (*coders
 	}), nil
 }
 
+type dialer interface {
+	DialContextTCP(ctx context.Context, ipp netip.AddrPort) (*gonet.TCPConn, error)
+	DialContextUDP(ctx context.Context, ipp netip.AddrPort) (*gonet.UDPConn, error)
+}
+
 func (s *serverTailnet) DialAgentNetConn(ctx context.Context, agentID uuid.UUID, network, addr string) (net.Conn, error) {
 	node, err := s.getNode(agentID)
 	if err != nil {
 		return nil, err
+	}
+
+	var dial dialer = s.conn
+
+	if node.Addresses[0].Addr() == codersdk.WorkspaceAgentIP {
+		conn, release, err := s.cache.Acquire(agentID)
+		if err != nil {
+			return nil, xerrors.Errorf("acquire conn from legacy cache: %w", err)
+		}
+		defer release()
+
+		dial = conn
 	}
 
 	_, rawPort, _ := net.SplitHostPort(addr)
@@ -240,9 +258,9 @@ func (s *serverTailnet) DialAgentNetConn(ctx context.Context, agentID uuid.UUID,
 	ipp := netip.AddrPortFrom(node.Addresses[0].Addr(), uint16(port))
 
 	if network == "tcp" {
-		return s.conn.DialContextTCP(ctx, ipp)
+		return dial.DialContextTCP(ctx, ipp)
 	} else if network == "udp" {
-		return s.conn.DialContextUDP(ctx, ipp)
+		return dial.DialContextUDP(ctx, ipp)
 	} else {
 		return nil, xerrors.Errorf("unknown network %q", network)
 	}
