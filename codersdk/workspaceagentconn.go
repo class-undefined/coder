@@ -134,6 +134,7 @@ type WorkspaceAgentConn struct {
 	opts WorkspaceAgentConnOptions
 }
 
+// @typescript-ignore WorkspaceAgentConnOptions
 type WorkspaceAgentConnOptions struct {
 	AgentID   uuid.UUID
 	GetNode   func(agentID uuid.UUID) (*tailnet.Node, error)
