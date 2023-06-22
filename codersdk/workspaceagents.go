@@ -168,7 +168,8 @@ type DERPRegion struct {
 // a connection with a workspace.
 // @typescript-ignore WorkspaceAgentConnectionInfo
 type WorkspaceAgentConnectionInfo struct {
-	DERPMap *tailcfg.DERPMap `json:"derp_map"`
+	DERPMap                  *tailcfg.DERPMap `json:"derp_map"`
+	DisableDirectConnections bool             `json:"disable_direct_connections"`
 }
 
 func (c *Client) WorkspaceAgentConnectionInfo(ctx context.Context) (*WorkspaceAgentConnectionInfo, error) {
@@ -194,7 +195,8 @@ func (c *Client) WorkspaceAgentConnectionInfo(ctx context.Context) (*WorkspaceAg
 // @typescript-ignore DialWorkspaceAgentOptions
 type DialWorkspaceAgentOptions struct {
 	Logger slog.Logger
-	// BlockEndpoints forced a direct connection through DERP.
+	// BlockEndpoints forced a direct connection through DERP. The Client may
+	// have DisableDirect set which will override this value.
 	BlockEndpoints bool
 }
 
@@ -215,6 +217,9 @@ func (c *Client) DialWorkspaceAgent(ctx context.Context, agentID uuid.UUID, opti
 	if err != nil {
 		return nil, xerrors.Errorf("decode conn info: %w", err)
 	}
+	if connInfo.DisableDirectConnections {
+		options.BlockEndpoints = true
+	}
 
 	ip := tailnet.IP()
 	var header http.Header
@@ -229,7 +234,7 @@ func (c *Client) DialWorkspaceAgent(ctx context.Context, agentID uuid.UUID, opti
 		DERPMap:        connInfo.DERPMap,
 		DERPHeader:     &header,
 		Logger:         options.Logger,
-		BlockEndpoints: options.BlockEndpoints,
+		BlockEndpoints: c.DisableDirectConnections || options.BlockEndpoints,
 	})
 	if err != nil {
 		return nil, xerrors.Errorf("create tailnet: %w", err)

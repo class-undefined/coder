@@ -22,6 +22,7 @@ import (
 	"github.com/coder/coder/coderd/httpapi"
 	"github.com/coder/coder/coderd/httpmw"
 	"github.com/coder/coder/coderd/tracing"
+	"github.com/coder/coder/coderd/util/slice"
 	"github.com/coder/coder/coderd/wsconncache"
 	"github.com/coder/coder/codersdk"
 	"github.com/coder/coder/site"
@@ -523,6 +524,26 @@ func (s *Server) proxyWorkspaceApp(rw http.ResponseWriter, r *http.Request, appT
 	appURL.RawQuery = ""
 
 	proxy := s.ReverseProxyProvider.ReverseProxy(appURL, s.DashboardURL, appToken.AgentID)
+
+	proxy.ModifyResponse = func(r *http.Response) error {
+		r.Header.Del(httpmw.AccessControlAllowOriginHeader)
+		r.Header.Del(httpmw.AccessControlAllowCredentialsHeader)
+		r.Header.Del(httpmw.AccessControlAllowMethodsHeader)
+		r.Header.Del(httpmw.AccessControlAllowHeadersHeader)
+		varies := r.Header.Values(httpmw.VaryHeader)
+		r.Header.Del(httpmw.VaryHeader)
+		forbiddenVary := []string{
+			httpmw.OriginHeader,
+			httpmw.AccessControlRequestMethodsHeader,
+			httpmw.AccessControlRequestHeadersHeader,
+		}
+		for _, value := range varies {
+			if !slice.ContainsCompare(forbiddenVary, value, strings.EqualFold) {
+				r.Header.Add(httpmw.VaryHeader, value)
+			}
+		}
+		return nil
+	}
 
 	// This strips the session token from a workspace app request.
 	cookieHeaders := r.Header.Values("Cookie")[:]
