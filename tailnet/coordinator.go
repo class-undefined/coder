@@ -16,7 +16,6 @@ import (
 
 	"cdr.dev/slog"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/google/uuid"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"golang.org/x/exp/slices"
@@ -36,7 +35,6 @@ type Coordinator interface {
 	ServeHTTPDebug(w http.ResponseWriter, r *http.Request)
 	// Node returns an in-memory node by ID.
 	Node(id uuid.UUID) *Node
-	NodeCount() int
 	// ServeClient accepts a WebSocket connection that wants to connect to an agent
 	// with the specified ID.
 	ServeClient(conn net.Conn, id uuid.UUID, agent uuid.UUID) error
@@ -308,10 +306,7 @@ func (c *core) node(id uuid.UUID) *Node {
 }
 
 func (c *coordinator) NodeCount() int {
-	c.core.mutex.Lock()
-	spew.Dump(c.core.nodes)
-	c.core.mutex.Unlock()
-	return c.core.agentCount()
+	return c.core.nodeCount()
 }
 
 func (c *core) nodeCount() int {

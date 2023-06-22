@@ -3,7 +3,6 @@ package coderd
 import (
 	"bufio"
 	"context"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -23,6 +22,7 @@ import (
 	"cdr.dev/slog"
 	"github.com/coder/coder/coderd/wsconncache"
 	"github.com/coder/coder/codersdk"
+	"github.com/coder/coder/site"
 	"github.com/coder/coder/tailnet"
 )
 
@@ -147,15 +147,13 @@ func (s *serverTailnet) updateNode(id uuid.UUID, node *tailnet.Node) {
 func (s *serverTailnet) ReverseProxy(targetURL, dashboardURL *url.URL, agentID uuid.UUID) *httputil.ReverseProxy {
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		w.WriteHeader(http.StatusBadGateway)
-		fmt.Fprint(w, "ERROR HAPPENED", err.Error())
-		// site.RenderStaticErrorPage(w, r, site.ErrorPageData{
-		// 	Status:       http.StatusBadGateway,
-		// 	Title:        "Bad Gateway",
-		// 	Description:  "Failed to proxy request to application: " + err.Error(),
-		// 	RetryEnabled: true,
-		// 	DashboardURL: dashboardURL.String(),
-		// })
+		site.RenderStaticErrorPage(w, r, site.ErrorPageData{
+			Status:       http.StatusBadGateway,
+			Title:        "Bad Gateway",
+			Description:  "Failed to proxy request to application: " + err.Error(),
+			RetryEnabled: true,
+			DashboardURL: dashboardURL.String(),
+		})
 	}
 	proxy.Director = s.director(agentID, proxy.Director)
 	proxy.Transport = s.transport
@@ -192,7 +190,7 @@ func (s *serverTailnet) getNode(agentID uuid.UUID) (*tailnet.Node, error) {
 		// The coordinator doesn't have the node either. Nothing we can do here.
 		if _node == nil {
 			s.nodesMu.Unlock()
-			return nil, xerrors.Errorf("node %q not found; total %d nodes", agentID.String())
+			return nil, xerrors.Errorf("node %q not found", agentID.String())
 		}
 		stop := coord.SubscribeAgent(agentID, s.updateNode)
 		node = &tailnetNode{

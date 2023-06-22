@@ -49,15 +49,13 @@ func NewCoordinator(logger slog.Logger, ps pubsub.Pubsub) (agpl.Coordinator, err
 	return coord, nil
 }
 
-func (c *haCoordinator) NodeCount() int {
-	return 69
-}
-
-func (c *haCoordinator) SubscribeAgent(agentID uuid.UUID, cb func(agentID uuid.UUID, node *agpl.Node)) func() {
+func (*haCoordinator) SubscribeAgent(agentID uuid.UUID, cb func(agentID uuid.UUID, node *agpl.Node)) func() {
+	_, _ = agentID, cb
 	panic("not implemented") // TODO: Implement
 }
 
-func (c *haCoordinator) BroadcastToAgents(agents []uuid.UUID, node *agpl.Node) error {
+func (*haCoordinator) BroadcastToAgents(agents []uuid.UUID, node *agpl.Node) error {
+	_, _ = agents, node
 	panic("not implemented") // TODO: Implement
 }
 

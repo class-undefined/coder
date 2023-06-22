@@ -106,10 +106,12 @@ func NewPGCoord(ctx context.Context, logger slog.Logger, ps pubsub.Pubsub, store
 }
 
 func (*pgCoord) SubscribeAgent(agentID uuid.UUID, cb func(agentID uuid.UUID, node *agpl.Node)) func() {
+	_, _ = agentID, cb
 	panic("not implemented") // TODO: Implement
 }
 
 func (*pgCoord) BroadcastToAgents(agents []uuid.UUID, node *agpl.Node) error {
+	_, _ = agents, node
 	panic("not implemented") // TODO: Implement
 }
 
@@ -137,10 +139,6 @@ func (c *pgCoord) Node(id uuid.UUID) *agpl.Node {
 		}
 	}
 	return bestN
-}
-
-func (c *pgCoord) NodeCount() int {
-	return 69
 }
 
 func (c *pgCoord) ServeClient(conn net.Conn, id uuid.UUID, agent uuid.UUID) error {
