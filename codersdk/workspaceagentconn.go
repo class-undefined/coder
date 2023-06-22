@@ -167,7 +167,7 @@ func (c *WorkspaceAgentConn) AwaitReachable(ctx context.Context) bool {
 		select {
 		case <-ctx.Done():
 			return false
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(10 * time.Millisecond):
 			continue
 		}
 	}

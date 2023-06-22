@@ -61,6 +61,8 @@ func newServerTailnet(
 		transport:   defaultTransport.Clone(),
 	}
 	tn.transport.DialContext = tn.dialContext
+	tn.transport.MaxIdleConnsPerHost = 10
+	tn.transport.MaxIdleConns = 0
 
 	conn.SetNodeCallback(func(node *tailnet.Node) {
 		tn.nodesMu.Lock()
@@ -198,6 +200,8 @@ func (s *serverTailnet) getNode(agentID uuid.UUID) (*tailnet.Node, error) {
 			stop:           stop,
 		}
 		s.agentNodes[agentID] = node
+
+		_ = coord.BroadcastToAgents([]uuid.UUID{agentID}, s.conn.Node())
 	}
 	s.nodesMu.Unlock()
 
@@ -226,13 +230,10 @@ func (s *serverTailnet) AgentConn(_ context.Context, agentID uuid.UUID) (*coders
 }
 
 func (s *serverTailnet) DialAgentNetConn(ctx context.Context, agentID uuid.UUID, network, addr string) (net.Conn, error) {
-	fmt.Println("DIAL AGENT", agentID)
 	node, err := s.getNode(agentID)
 	if err != nil {
 		return nil, err
 	}
-
-	fmt.Println("GOT NODE", node)
 
 	_, rawPort, _ := net.SplitHostPort(addr)
 	port, _ := strconv.ParseUint(rawPort, 10, 16)
