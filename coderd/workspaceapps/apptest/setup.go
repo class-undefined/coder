@@ -407,7 +407,7 @@ func requestWithRetries(ctx context.Context, t testing.TB, client *codersdk.Clie
 			return false
 		}
 		return true
-	}, testutil.WaitLong, testutil.IntervalSlow)
+	}, testutil.WaitLong, testutil.IntervalFast)
 	return resp, err
 }
 
