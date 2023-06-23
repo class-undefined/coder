@@ -370,9 +370,9 @@ func New(options *Options) *API {
 		HostnameRegex: api.AppHostnameRegex,
 		RealIPConfig:  options.RealIPConfig,
 
-		SignedTokenProvider:  api.WorkspaceAppsProvider,
-		ReverseProxyProvider: api.tailnet,
-		AppSecurityKey:       options.AppSecurityKey,
+		SignedTokenProvider: api.WorkspaceAppsProvider,
+		AgentProvider:       api.tailnet,
+		AppSecurityKey:      options.AppSecurityKey,
 
 		DisablePathApps:  options.DeploymentValues.DisablePathApps.Value(),
 		SecureAuthCookie: options.DeploymentValues.SecureAuthCookie.Value(),

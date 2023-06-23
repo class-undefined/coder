@@ -31,6 +31,7 @@ func New(dialer Dialer, inactiveTimeout time.Duration) *Cache {
 		closed:          make(chan struct{}),
 		dialer:          dialer,
 		inactiveTimeout: inactiveTimeout,
+		// connMap: ,
 	}
 }
 

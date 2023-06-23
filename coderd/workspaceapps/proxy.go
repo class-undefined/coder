@@ -23,7 +23,6 @@ import (
 	"github.com/coder/coder/coderd/httpmw"
 	"github.com/coder/coder/coderd/tracing"
 	"github.com/coder/coder/coderd/util/slice"
-	"github.com/coder/coder/coderd/wsconncache"
 	"github.com/coder/coder/codersdk"
 	"github.com/coder/coder/site"
 )
@@ -61,7 +60,8 @@ var nonCanonicalHeaders = map[string]string{
 	"Sec-Websocket-Version":    "Sec-WebSocket-Version",
 }
 
-type ReverseProxyProvider interface {
+type AgentProvider interface {
+	AgentConn(_ context.Context, agentID uuid.UUID) (*codersdk.WorkspaceAgentConn, error)
 	ReverseProxy(targetURL, dashboardURL *url.URL, agentID uuid.UUID) *httputil.ReverseProxy
 }
 
@@ -87,7 +87,6 @@ type Server struct {
 	RealIPConfig  *httpmw.RealIPConfig
 
 	SignedTokenProvider SignedTokenProvider
-	WorkspaceConnCache  *wsconncache.Cache
 	AppSecurityKey      SecurityKey
 
 	// DisablePathApps disables path-based apps. This is a security feature as path
@@ -99,7 +98,7 @@ type Server struct {
 	DisablePathApps  bool
 	SecureAuthCookie bool
 
-	ReverseProxyProvider ReverseProxyProvider
+	AgentProvider AgentProvider
 
 	websocketWaitMutex sync.Mutex
 	websocketWaitGroup sync.WaitGroup
@@ -523,7 +522,7 @@ func (s *Server) proxyWorkspaceApp(rw http.ResponseWriter, r *http.Request, appT
 	r.URL.Path = path
 	appURL.RawQuery = ""
 
-	proxy := s.ReverseProxyProvider.ReverseProxy(appURL, s.DashboardURL, appToken.AgentID)
+	proxy := s.AgentProvider.ReverseProxy(appURL, s.DashboardURL, appToken.AgentID)
 
 	proxy.ModifyResponse = func(r *http.Response) error {
 		r.Header.Del(httpmw.AccessControlAllowOriginHeader)
@@ -641,13 +640,13 @@ func (s *Server) workspaceAgentPTY(rw http.ResponseWriter, r *http.Request) {
 
 	go httpapi.Heartbeat(ctx, conn)
 
-	agentConn, release, err := s.WorkspaceConnCache.Acquire(appToken.AgentID)
+	agentConn, err := s.AgentProvider.AgentConn(ctx, appToken.AgentID)
 	if err != nil {
 		log.Debug(ctx, "dial workspace agent", slog.Error(err))
 		_ = conn.Close(websocket.StatusInternalError, httpapi.WebsocketCloseSprintf("dial workspace agent: %s", err))
 		return
 	}
-	defer release()
+	defer agentConn.Close()
 	log.Debug(ctx, "dialed workspace agent")
 	ptNetConn, err := agentConn.ReconnectingPTY(ctx, reconnect, uint16(height), uint16(width), r.URL.Query().Get("command"))
 	if err != nil {
