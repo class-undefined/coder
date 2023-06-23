@@ -194,9 +194,11 @@ func setupAgent(t *testing.T, manifest agentsdk.Manifest, ptyTimeout time.Durati
 		return conn.UpdateNodes(node, false)
 	})
 	conn.SetNodeCallback(sendNode)
-	agentConn := &codersdk.WorkspaceAgentConn{
-		Conn: conn,
-	}
+	agentConn := codersdk.NewWorkspaceAgentConn(conn, codersdk.WorkspaceAgentConnOptions{
+		AgentID:   agentID,
+		GetNode:   func(agentID uuid.UUID) (*tailnet.Node, error) { return conn.Node(), nil },
+		CloseFunc: func() {},
+	})
 	t.Cleanup(func() {
 		_ = agentConn.Close()
 	})
