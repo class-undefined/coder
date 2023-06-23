@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 	"go.uber.org/goleak"
+	"golang.org/x/xerrors"
 
 	"cdr.dev/slog"
 	"cdr.dev/slog/sloggers/slogtest"
@@ -195,8 +196,14 @@ func setupAgent(t *testing.T, manifest agentsdk.Manifest, ptyTimeout time.Durati
 	})
 	conn.SetNodeCallback(sendNode)
 	agentConn := codersdk.NewWorkspaceAgentConn(conn, codersdk.WorkspaceAgentConnOptions{
-		AgentID:   agentID,
-		GetNode:   func(agentID uuid.UUID) (*tailnet.Node, error) { return conn.Node(), nil },
+		AgentID: agentID,
+		GetNode: func(agentID uuid.UUID) (*tailnet.Node, error) {
+			node := coordinator.Node(agentID)
+			if node == nil {
+				return nil, xerrors.Errorf("node not found %q", err)
+			}
+			return node, nil
+		},
 		CloseFunc: func() {},
 	})
 	t.Cleanup(func() {
