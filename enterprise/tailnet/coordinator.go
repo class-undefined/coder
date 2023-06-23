@@ -357,6 +357,19 @@ func (c *haCoordinator) handleAgentUpdate(id uuid.UUID, decoder *json.Decoder) (
 	for _, connectionSocket := range connectionSockets {
 		_ = connectionSocket.Enqueue([]*agpl.Node{&node})
 	}
+
+	wg := sync.WaitGroup{}
+	cbs := c.agentCallbacks[id]
+	wg.Add(len(cbs))
+	for _, cb := range cbs {
+		cb := cb
+		go func() {
+			cb(id, &node)
+			wg.Done()
+		}()
+	}
+	wg.Wait()
+
 	c.mutex.Unlock()
 	return &node, nil
 }
