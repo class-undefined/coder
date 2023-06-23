@@ -186,7 +186,7 @@ func New(ctx context.Context, opts *Options) (*Server, error) {
 		AppSecurityKey: secKey,
 
 		// TODO: Convert wsproxy to use coderd.ServerTailnet.
-		AgentProvider: &workspaceapps.AgentProviderWSConnCache{
+		AgentProvider: &wsconncache.AgentProvider{
 			Cache: wsconncache.New(s.DialWorkspaceAgent, 0),
 		},
 		DisablePathApps:  opts.DisablePathApps,
@@ -276,6 +276,7 @@ func (s *Server) Close() error {
 	tmp, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	_ = s.SDKClient.WorkspaceProxyGoingAway(tmp)
+	_ = s.AppServer.AgentProvider.Close()
 
 	return s.AppServer.Close()
 }

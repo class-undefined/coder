@@ -5,6 +5,8 @@ package wsconncache
 import (
 	"context"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"sync"
 	"time"
 
@@ -14,7 +16,47 @@ import (
 	"golang.org/x/xerrors"
 
 	"github.com/coder/coder/codersdk"
+	"github.com/coder/coder/site"
 )
+
+type AgentProvider struct {
+	Cache *Cache
+}
+
+func (a *AgentProvider) AgentConn(_ context.Context, agentID uuid.UUID) (*codersdk.WorkspaceAgentConn, func(), error) {
+	conn, rel, err := a.Cache.Acquire(agentID)
+	if err != nil {
+		return nil, nil, xerrors.Errorf("acquire agent connection: %w", err)
+	}
+
+	return conn.WorkspaceAgentConn, rel, nil
+}
+
+func (a *AgentProvider) ReverseProxy(targetURL *url.URL, dashboardURL *url.URL, agentID uuid.UUID) (*httputil.ReverseProxy, func(), error) {
+	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		site.RenderStaticErrorPage(w, r, site.ErrorPageData{
+			Status:       http.StatusBadGateway,
+			Title:        "Bad Gateway",
+			Description:  "Failed to proxy request to application: " + err.Error(),
+			RetryEnabled: true,
+			DashboardURL: dashboardURL.String(),
+		})
+	}
+
+	conn, release, err := a.Cache.Acquire(agentID)
+	if err != nil {
+		return nil, nil, xerrors.Errorf("acquire agent connection: %w", err)
+	}
+
+	proxy.Transport = conn.HTTPTransport()
+
+	return proxy, release, nil
+}
+
+func (a *AgentProvider) Close() error {
+	return a.Cache.Close()
+}
 
 // New creates a new workspace connection cache that closes connections after
 // the inactive timeout provided.
@@ -22,7 +64,8 @@ import (
 // Agent connections are cached due to Wireguard negotiation taking a few
 // hundred milliseconds, depending on latency.
 //
-// DEPRECATED: coderd now runs its own tailnet.
+// Deprecated: Use coderd.NewServerTailnet instead. wsconncache is being phased
+// out because it creates a unique Tailnet for each agent.
 func New(dialer Dialer, inactiveTimeout time.Duration) *Cache {
 	if inactiveTimeout == 0 {
 		inactiveTimeout = 5 * time.Minute

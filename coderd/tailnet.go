@@ -15,7 +15,6 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/xerrors"
-	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"tailscale.com/derp"
 	"tailscale.com/tailcfg"
 
@@ -36,6 +35,10 @@ func init() {
 	}
 }
 
+// TODO: ServerTailnet does not currently remove stale peers.
+
+// NewServerTailnet creates a new tailnet intended for use by coderd. It
+// automatically falls back to wsconncache if a legacy agent is encountered.
 func NewServerTailnet(
 	ctx context.Context,
 	logger slog.Logger,
@@ -43,14 +46,14 @@ func NewServerTailnet(
 	derpMap *tailcfg.DERPMap,
 	coord *atomic.Pointer[tailnet.Coordinator],
 	cache *wsconncache.Cache,
-) *ServerTailnet {
+) (*ServerTailnet, error) {
 	conn, err := tailnet.NewConn(&tailnet.Options{
 		Addresses: []netip.Prefix{netip.PrefixFrom(tailnet.IP(), 128)},
 		DERPMap:   derpMap,
 		Logger:    logger.Named("tailnet"),
 	})
 	if err != nil {
-		panic(xerrors.Errorf("create tailnet: %w", err))
+		return nil, xerrors.Errorf("create tailnet conn: %w", err)
 	}
 
 	tn := &ServerTailnet{
@@ -96,7 +99,7 @@ func NewServerTailnet(
 		return left
 	})
 
-	return tn
+	return tn, nil
 }
 
 type tailnetNode struct {
@@ -129,13 +132,13 @@ func (s *ServerTailnet) updateNode(id uuid.UUID, node *tailnet.Node) {
 	if ok {
 		err := s.conn.UpdateNodes([]*tailnet.Node{node}, false)
 		if err != nil {
-			s.logger.Error(context.Background(), "update node ..................... t", slog.Error(err))
+			s.logger.Error(context.Background(), "update node in server tailnet", slog.Error(err))
 			return
 		}
 	}
 }
 
-func (s *ServerTailnet) ReverseProxy(targetURL, dashboardURL *url.URL, agentID uuid.UUID) (*httputil.ReverseProxy, error) {
+func (s *ServerTailnet) ReverseProxy(targetURL, dashboardURL *url.URL, agentID uuid.UUID) (*httputil.ReverseProxy, func(), error) {
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		site.RenderStaticErrorPage(w, r, site.ErrorPageData{
@@ -149,7 +152,7 @@ func (s *ServerTailnet) ReverseProxy(targetURL, dashboardURL *url.URL, agentID u
 	proxy.Director = s.director(agentID, proxy.Director)
 	proxy.Transport = s.transport
 
-	return proxy, nil
+	return proxy, func() {}, nil
 }
 
 type agentIDKey struct{}
@@ -173,79 +176,135 @@ func (s *ServerTailnet) dialContext(ctx context.Context, network, addr string) (
 
 func (s *ServerTailnet) getNode(agentID uuid.UUID) (*tailnet.Node, error) {
 	s.nodesMu.Lock()
-	node, ok := s.agentNodes[agentID]
+	tnode, ok := s.agentNodes[agentID]
 	// If we don't have the node, fetch it from the coordinator.
 	if !ok {
 		coord := *s.coordinator.Load()
-		_node := coord.Node(agentID)
+		node := coord.Node(agentID)
 		// The coordinator doesn't have the node either. Nothing we can do here.
-		if _node == nil {
+		if node == nil {
 			s.nodesMu.Unlock()
 			return nil, xerrors.Errorf("node %q not found", agentID.String())
 		}
 		stop := coord.SubscribeAgent(agentID, s.updateNode)
-		node = &tailnetNode{
-			node:           _node,
+		tnode = &tailnetNode{
+			node:           node,
 			lastConnection: time.Now(),
 			stop:           stop,
 		}
-		s.agentNodes[agentID] = node
+		s.agentNodes[agentID] = tnode
 
-		_ = coord.BroadcastToAgents([]uuid.UUID{agentID}, s.conn.Node())
+		err := coord.BroadcastToAgents([]uuid.UUID{agentID}, s.conn.Node())
+		if err != nil {
+			s.logger.Debug(context.Background(), "broadcast server node to agents", slog.Error(err))
+		}
 	}
 	s.nodesMu.Unlock()
 
-	if len(node.node.Addresses) == 0 {
+	if len(tnode.node.Addresses) == 0 {
 		return nil, xerrors.New("agent has no reachable addresses")
 	}
 
 	// if we didn't already have the node locally, add it to our tailnet.
 	if !ok {
-		err := s.conn.UpdateNodes([]*tailnet.Node{node.node}, false)
+		err := s.conn.UpdateNodes([]*tailnet.Node{tnode.node}, false)
 		if err != nil {
-			return nil, xerrors.Errorf("set nodes: %w", err)
+			return nil, xerrors.Errorf("update nodes: %w", err)
 		}
 	}
 
-	return node.node, nil
+	return tnode.node, nil
+}
+
+func (s *ServerTailnet) awaitNodeExists(ctx context.Context, id uuid.UUID, timeout time.Duration) (*tailnet.Node, error) {
+	// Short circuit, if the node already exists, don't spend time setting up
+	// the ticker and loop.
+	if node, err := s.getNode(id); err == nil {
+		return node, nil
+	}
+
+	var (
+		ticker = time.NewTicker(10 * time.Millisecond)
+
+		tries int
+		node  *tailnet.Node
+		err   error
+	)
+	defer ticker.Stop()
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			// return the last error we got from getNode.
+			return nil, xerrors.Errorf("tries %d, last error: %w", tries, err)
+		case <-ticker.C:
+		}
+
+		tries++
+		node, err = s.getNode(id)
+		if err == nil {
+			return node, nil
+		}
+	}
+}
+
+func (*ServerTailnet) nodeIsLegacy(node *tailnet.Node) bool {
+	return node.Addresses[0].Addr() == codersdk.WorkspaceAgentIP
 }
 
 func (s *ServerTailnet) AgentConn(ctx context.Context, agentID uuid.UUID) (*codersdk.WorkspaceAgentConn, func(), error) {
-	conn := codersdk.NewWorkspaceAgentConn(s.conn, codersdk.WorkspaceAgentConnOptions{
-		AgentID:   agentID,
-		GetNode:   s.getNode,
-		CloseFunc: func() {},
-	})
+	node, err := s.awaitNodeExists(ctx, agentID, 5*time.Second)
+	if err != nil {
+		return nil, nil, xerrors.Errorf("get agent node: %w", err)
+	}
+
+	var (
+		conn *codersdk.WorkspaceAgentConn
+		ret  = func() {}
+	)
+
+	if s.nodeIsLegacy(node) {
+		cconn, release, err := s.cache.Acquire(agentID)
+		if err != nil {
+			return nil, nil, xerrors.Errorf("acquire legacy agent conn: %w", err)
+		}
+
+		conn = cconn.WorkspaceAgentConn
+		ret = release
+	} else {
+		conn = codersdk.NewWorkspaceAgentConn(s.conn, codersdk.WorkspaceAgentConnOptions{
+			AgentID:   agentID,
+			GetNode:   s.getNode,
+			CloseFunc: func() {},
+		})
+	}
 
 	reachable := conn.AwaitReachable(ctx)
 	if !reachable {
 		return nil, nil, xerrors.New("agent is unreachable")
 	}
 
-	return conn, func() {}, nil
-}
-
-type dialer interface {
-	DialContextTCP(ctx context.Context, ipp netip.AddrPort) (*gonet.TCPConn, error)
-	DialContextUDP(ctx context.Context, ipp netip.AddrPort) (*gonet.UDPConn, error)
+	return conn, ret, nil
 }
 
 func (s *ServerTailnet) DialAgentNetConn(ctx context.Context, agentID uuid.UUID, network, addr string) (net.Conn, error) {
-	node, err := s.getNode(agentID)
+	conn, release, err := s.AgentConn(ctx, agentID)
 	if err != nil {
-		return nil, err
+		return nil, xerrors.Errorf("acquire agent conn: %w", err)
+	}
+	defer release()
+
+	reachable := conn.AwaitReachable(ctx)
+	if !reachable {
+		return nil, xerrors.New("agent is unreachable")
 	}
 
-	var dial dialer = s.conn
-
-	if node.Addresses[0].Addr() == codersdk.WorkspaceAgentIP {
-		conn, release, err := s.cache.Acquire(agentID)
-		if err != nil {
-			return nil, xerrors.Errorf("acquire conn from legacy cache: %w", err)
-		}
-		defer release()
-
-		dial = conn
+	node, err := s.getNode(agentID)
+	if !reachable {
+		return nil, xerrors.New("get agent node")
 	}
 
 	_, rawPort, _ := net.SplitHostPort(addr)
@@ -253,16 +312,17 @@ func (s *ServerTailnet) DialAgentNetConn(ctx context.Context, agentID uuid.UUID,
 	ipp := netip.AddrPortFrom(node.Addresses[0].Addr(), uint16(port))
 
 	if network == "tcp" {
-		return dial.DialContextTCP(ctx, ipp)
+		return conn.DialContextTCP(ctx, ipp)
 	} else if network == "udp" {
-		return dial.DialContextUDP(ctx, ipp)
+		return conn.DialContextUDP(ctx, ipp)
 	} else {
 		return nil, xerrors.Errorf("unknown network %q", network)
 	}
 }
 
 func (s *ServerTailnet) Close() error {
-	s.conn.Close()
+	_ = s.cache.Close()
+	_ = s.conn.Close()
 	s.transport.CloseIdleConnections()
 	return nil
 }

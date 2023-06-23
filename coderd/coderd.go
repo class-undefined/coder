@@ -38,7 +38,6 @@ import (
 
 	// Used for swagger docs.
 	_ "github.com/coder/coder/coderd/apidoc"
-	"github.com/coder/coder/coderd/wsconncache"
 
 	"cdr.dev/slog"
 	"github.com/coder/coder/buildinfo"
@@ -61,6 +60,7 @@ import (
 	"github.com/coder/coder/coderd/updatecheck"
 	"github.com/coder/coder/coderd/util/slice"
 	"github.com/coder/coder/coderd/workspaceapps"
+	"github.com/coder/coder/coderd/wsconncache"
 	"github.com/coder/coder/codersdk"
 	"github.com/coder/coder/codersdk/agentsdk"
 	"github.com/coder/coder/provisionerd/proto"
@@ -351,15 +351,17 @@ func New(options *Options) *API {
 	}
 
 	api.Auditor.Store(&options.Auditor)
-	// api.workspaceAgentCache = wsconncache.New(api.dialWorkspaceAgentTailnet, 0)
 	api.TailnetCoordinator.Store(&options.TailnetCoordinator)
-	api.tailnet = NewServerTailnet(api.ctx,
+	api.tailnet, err = NewServerTailnet(api.ctx,
 		options.Logger,
 		options.DERPServer,
 		options.DERPMap,
 		&api.TailnetCoordinator,
 		wsconncache.New(api.dialWorkspaceAgentTailnet, 0),
 	)
+	if err != nil {
+		panic("failed to setup server tailnet: " + err.Error())
+	}
 
 	api.workspaceAppServer = &workspaceapps.Server{
 		Logger: options.Logger.Named("workspaceapps"),
@@ -880,8 +882,7 @@ type API struct {
 	WebsocketWaitGroup sync.WaitGroup
 	derpCloseFunc      func()
 
-	metricsCache *metricscache.Cache
-	// workspaceAgentCache   *wsconncache.Cache
+	metricsCache          *metricscache.Cache
 	updateChecker         *updatecheck.Checker
 	WorkspaceAppsProvider workspaceapps.SignedTokenProvider
 	workspaceAppServer    *workspaceapps.Server

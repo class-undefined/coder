@@ -158,7 +158,7 @@ func TestCache(t *testing.T) {
 func setupAgent(t *testing.T, manifest agentsdk.Manifest, ptyTimeout time.Duration) *codersdk.WorkspaceAgentConn {
 	t.Helper()
 	logger := slogtest.Make(t, nil).Leveled(slog.LevelDebug)
-	manifest.DERPMap = tailnettest.RunDERPAndSTUN(t)
+	manifest.DERPMap, _ = tailnettest.RunDERPAndSTUN(t)
 
 	coordinator := tailnet.NewCoordinator(logger)
 	t.Cleanup(func() {
