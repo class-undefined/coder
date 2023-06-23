@@ -1284,7 +1284,6 @@ func (api *API) convertUserToOauth(ctx context.Context, r *http.Request, db data
 		}
 	}
 	return nil
-
 }
 
 // githubLinkedID returns the unique ID for a GitHub user.
