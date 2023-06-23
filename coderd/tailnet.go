@@ -210,15 +210,19 @@ func (s *ServerTailnet) getNode(agentID uuid.UUID) (*tailnet.Node, error) {
 	return node.node, nil
 }
 
-func (s *ServerTailnet) AgentConn(_ context.Context, agentID uuid.UUID) (*codersdk.WorkspaceAgentConn, func(), error) {
-	return codersdk.NewWorkspaceAgentConn(s.conn, codersdk.WorkspaceAgentConnOptions{
-			AgentID:   agentID,
-			GetNode:   s.getNode,
-			CloseFunc: func() {},
-		}),
-		// TODO: close ticket
-		func() {},
-		nil
+func (s *ServerTailnet) AgentConn(ctx context.Context, agentID uuid.UUID) (*codersdk.WorkspaceAgentConn, func(), error) {
+	conn := codersdk.NewWorkspaceAgentConn(s.conn, codersdk.WorkspaceAgentConnOptions{
+		AgentID:   agentID,
+		GetNode:   s.getNode,
+		CloseFunc: func() {},
+	})
+
+	reachable := conn.AwaitReachable(ctx)
+	if !reachable {
+		return nil, nil, xerrors.New("agent is unreachable")
+	}
+
+	return conn, func() {}, nil
 }
 
 type dialer interface {

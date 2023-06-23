@@ -419,7 +419,7 @@ func (c *WorkspaceAgentConn) apiRequest(ctx context.Context, method, path string
 
 	agentAddr, err := c.getAgentAddress()
 	if err != nil {
-		return nil, err
+		return nil, xerrors.Errorf("get agent address: %w", err)
 	}
 
 	host := net.JoinHostPort(agentAddr.String(), strconv.Itoa(WorkspaceAgentHTTPAPIServerPort))
