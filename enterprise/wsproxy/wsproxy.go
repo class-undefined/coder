@@ -23,7 +23,6 @@ import (
 	"github.com/coder/coder/coderd/httpmw"
 	"github.com/coder/coder/coderd/tracing"
 	"github.com/coder/coder/coderd/workspaceapps"
-	"github.com/coder/coder/coderd/wsconncache"
 	"github.com/coder/coder/codersdk"
 	"github.com/coder/coder/enterprise/wsproxy/wsproxysdk"
 	"github.com/coder/coder/site"
@@ -183,8 +182,7 @@ func New(ctx context.Context, opts *Options) (*Server, error) {
 			SecurityKey:  secKey,
 			Logger:       s.Logger.Named("proxy_token_provider"),
 		},
-		WorkspaceConnCache: wsconncache.New(s.DialWorkspaceAgent, 0),
-		AppSecurityKey:     secKey,
+		AppSecurityKey: secKey,
 
 		DisablePathApps:  opts.DisablePathApps,
 		SecureAuthCookie: opts.SecureAuthCookie,
