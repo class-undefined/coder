@@ -811,9 +811,6 @@ func (c *coordinator) SubscribeAgent(agentID uuid.UUID, cb func(agentID uuid.UUI
 func (c *coordinator) BroadcastToAgents(agents []uuid.UUID, node *Node) error {
 	ctx := context.Background()
 
-	// c.core.mutex.Lock()
-	// c.core.nodes
-	// c.core.mutex.Unlock()
 	for _, id := range agents {
 		c.core.mutex.Lock()
 		agentSocket, ok := c.core.agentSockets[id]
