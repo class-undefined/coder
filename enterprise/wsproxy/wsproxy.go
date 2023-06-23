@@ -23,6 +23,7 @@ import (
 	"github.com/coder/coder/coderd/httpmw"
 	"github.com/coder/coder/coderd/tracing"
 	"github.com/coder/coder/coderd/workspaceapps"
+	"github.com/coder/coder/coderd/wsconncache"
 	"github.com/coder/coder/codersdk"
 	"github.com/coder/coder/enterprise/wsproxy/wsproxysdk"
 	"github.com/coder/coder/site"
@@ -184,6 +185,10 @@ func New(ctx context.Context, opts *Options) (*Server, error) {
 		},
 		AppSecurityKey: secKey,
 
+		// TODO: Convert wsproxy to use coderd.ServerTailnet.
+		AgentProvider: &workspaceapps.AgentProviderWSConnCache{
+			Cache: wsconncache.New(s.DialWorkspaceAgent, 0),
+		},
 		DisablePathApps:  opts.DisablePathApps,
 		SecureAuthCookie: opts.SecureAuthCookie,
 	}

@@ -353,7 +353,7 @@ func New(options *Options) *API {
 	api.Auditor.Store(&options.Auditor)
 	// api.workspaceAgentCache = wsconncache.New(api.dialWorkspaceAgentTailnet, 0)
 	api.TailnetCoordinator.Store(&options.TailnetCoordinator)
-	api.tailnet = newServerTailnet(api.ctx,
+	api.tailnet = NewServerTailnet(api.ctx,
 		options.Logger,
 		options.DERPServer,
 		options.DERPMap,
@@ -885,7 +885,7 @@ type API struct {
 	updateChecker         *updatecheck.Checker
 	WorkspaceAppsProvider workspaceapps.SignedTokenProvider
 	workspaceAppServer    *workspaceapps.Server
-	tailnet               *serverTailnet
+	tailnet               *ServerTailnet
 
 	// Experiments contains the list of experiments currently enabled.
 	// This is used to gate features that are not yet ready for production.

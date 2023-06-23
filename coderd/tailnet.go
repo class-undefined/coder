@@ -36,14 +36,14 @@ func init() {
 	}
 }
 
-func newServerTailnet(
+func NewServerTailnet(
 	ctx context.Context,
 	logger slog.Logger,
 	derpServer *derp.Server,
 	derpMap *tailcfg.DERPMap,
 	coord *atomic.Pointer[tailnet.Coordinator],
 	cache *wsconncache.Cache,
-) *serverTailnet {
+) *ServerTailnet {
 	conn, err := tailnet.NewConn(&tailnet.Options{
 		Addresses: []netip.Prefix{netip.PrefixFrom(tailnet.IP(), 128)},
 		DERPMap:   derpMap,
@@ -53,7 +53,7 @@ func newServerTailnet(
 		panic(xerrors.Errorf("create tailnet: %w", err))
 	}
 
-	tn := &serverTailnet{
+	tn := &ServerTailnet{
 		logger:      logger,
 		conn:        conn,
 		coordinator: coord,
@@ -105,7 +105,7 @@ type tailnetNode struct {
 	stop           func()
 }
 
-type serverTailnet struct {
+type ServerTailnet struct {
 	logger      slog.Logger
 	conn        *tailnet.Conn
 	coordinator *atomic.Pointer[tailnet.Coordinator]
@@ -118,7 +118,7 @@ type serverTailnet struct {
 	transport *http.Transport
 }
 
-func (s *serverTailnet) updateNode(id uuid.UUID, node *tailnet.Node) {
+func (s *ServerTailnet) updateNode(id uuid.UUID, node *tailnet.Node) {
 	s.nodesMu.Lock()
 	cached, ok := s.agentNodes[id]
 	if ok {
@@ -135,16 +135,7 @@ func (s *serverTailnet) updateNode(id uuid.UUID, node *tailnet.Node) {
 	}
 }
 
-// func (s *serverTailnet) gatherNodes() []*tailnet.Node {
-// 	nodes := make([]*tailnet.Node, 0, len(s.agentNodes))
-// 	for _, node := range s.agentNodes {
-// 		nodes = append(nodes, node.node)
-// 	}
-
-// 	return nodes
-// }
-
-func (s *serverTailnet) ReverseProxy(targetURL, dashboardURL *url.URL, agentID uuid.UUID) *httputil.ReverseProxy {
+func (s *ServerTailnet) ReverseProxy(targetURL, dashboardURL *url.URL, agentID uuid.UUID) (*httputil.ReverseProxy, error) {
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		site.RenderStaticErrorPage(w, r, site.ErrorPageData{
@@ -158,12 +149,12 @@ func (s *serverTailnet) ReverseProxy(targetURL, dashboardURL *url.URL, agentID u
 	proxy.Director = s.director(agentID, proxy.Director)
 	proxy.Transport = s.transport
 
-	return proxy
+	return proxy, nil
 }
 
 type agentIDKey struct{}
 
-func (*serverTailnet) director(agentID uuid.UUID, prev func(req *http.Request)) func(req *http.Request) {
+func (*ServerTailnet) director(agentID uuid.UUID, prev func(req *http.Request)) func(req *http.Request) {
 	return func(req *http.Request) {
 		ctx := context.WithValue(req.Context(), agentIDKey{}, agentID)
 		*req = *req.WithContext(ctx)
@@ -171,7 +162,7 @@ func (*serverTailnet) director(agentID uuid.UUID, prev func(req *http.Request)) 
 	}
 }
 
-func (s *serverTailnet) dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+func (s *ServerTailnet) dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	agentID, ok := ctx.Value(agentIDKey{}).(uuid.UUID)
 	if !ok {
 		return nil, xerrors.Errorf("no agent id attached")
@@ -180,7 +171,7 @@ func (s *serverTailnet) dialContext(ctx context.Context, network, addr string) (
 	return s.DialAgentNetConn(ctx, agentID, network, addr)
 }
 
-func (s *serverTailnet) getNode(agentID uuid.UUID) (*tailnet.Node, error) {
+func (s *ServerTailnet) getNode(agentID uuid.UUID) (*tailnet.Node, error) {
 	s.nodesMu.Lock()
 	node, ok := s.agentNodes[agentID]
 	// If we don't have the node, fetch it from the coordinator.
@@ -219,13 +210,15 @@ func (s *serverTailnet) getNode(agentID uuid.UUID) (*tailnet.Node, error) {
 	return node.node, nil
 }
 
-func (s *serverTailnet) AgentConn(_ context.Context, agentID uuid.UUID) (*codersdk.WorkspaceAgentConn, error) {
+func (s *ServerTailnet) AgentConn(_ context.Context, agentID uuid.UUID) (*codersdk.WorkspaceAgentConn, func(), error) {
 	return codersdk.NewWorkspaceAgentConn(s.conn, codersdk.WorkspaceAgentConnOptions{
-		AgentID: agentID,
-		GetNode: s.getNode,
+			AgentID:   agentID,
+			GetNode:   s.getNode,
+			CloseFunc: func() {},
+		}),
 		// TODO: close ticket
-		CloseFunc: func() {},
-	}), nil
+		func() {},
+		nil
 }
 
 type dialer interface {
@@ -233,7 +226,7 @@ type dialer interface {
 	DialContextUDP(ctx context.Context, ipp netip.AddrPort) (*gonet.UDPConn, error)
 }
 
-func (s *serverTailnet) DialAgentNetConn(ctx context.Context, agentID uuid.UUID, network, addr string) (net.Conn, error) {
+func (s *ServerTailnet) DialAgentNetConn(ctx context.Context, agentID uuid.UUID, network, addr string) (net.Conn, error) {
 	node, err := s.getNode(agentID)
 	if err != nil {
 		return nil, err
@@ -264,7 +257,7 @@ func (s *serverTailnet) DialAgentNetConn(ctx context.Context, agentID uuid.UUID,
 	}
 }
 
-func (s *serverTailnet) Close() error {
+func (s *ServerTailnet) Close() error {
 	s.conn.Close()
 	s.transport.CloseIdleConnections()
 	return nil

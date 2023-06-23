@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/xerrors"
 	"nhooyr.io/websocket"
 
 	"cdr.dev/slog"
@@ -23,6 +24,7 @@ import (
 	"github.com/coder/coder/coderd/httpmw"
 	"github.com/coder/coder/coderd/tracing"
 	"github.com/coder/coder/coderd/util/slice"
+	"github.com/coder/coder/coderd/wsconncache"
 	"github.com/coder/coder/codersdk"
 	"github.com/coder/coder/site"
 )
@@ -61,8 +63,47 @@ var nonCanonicalHeaders = map[string]string{
 }
 
 type AgentProvider interface {
-	AgentConn(_ context.Context, agentID uuid.UUID) (*codersdk.WorkspaceAgentConn, error)
-	ReverseProxy(targetURL, dashboardURL *url.URL, agentID uuid.UUID) *httputil.ReverseProxy
+	// TODO: after wsconncache is deleted this doesn't need to return a release
+	// func.
+	AgentConn(ctx context.Context, agentID uuid.UUID) (*codersdk.WorkspaceAgentConn, func(), error)
+	// TODO: after wsconncache is deleted this doesn't need to return an error.
+	ReverseProxy(targetURL, dashboardURL *url.URL, agentID uuid.UUID) (*httputil.ReverseProxy, error)
+}
+
+type AgentProviderWSConnCache struct {
+	Cache *wsconncache.Cache
+}
+
+func (w *AgentProviderWSConnCache) AgentConn(_ context.Context, agentID uuid.UUID) (*codersdk.WorkspaceAgentConn, func(), error) {
+	conn, rel, err := w.Cache.Acquire(agentID)
+	if err != nil {
+		return nil, nil, xerrors.Errorf("acquire agent connection: %w", err)
+	}
+
+	return conn.WorkspaceAgentConn, rel, nil
+}
+
+func (w *AgentProviderWSConnCache) ReverseProxy(targetURL *url.URL, dashboardURL *url.URL, agentID uuid.UUID) (*httputil.ReverseProxy, error) {
+	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		site.RenderStaticErrorPage(w, r, site.ErrorPageData{
+			Status:       http.StatusBadGateway,
+			Title:        "Bad Gateway",
+			Description:  "Failed to proxy request to application: " + err.Error(),
+			RetryEnabled: true,
+			DashboardURL: dashboardURL.String(),
+		})
+	}
+
+	conn, release, err := w.Cache.Acquire(agentID)
+	if err != nil {
+		return nil, xerrors.Errorf("acquire agent connection: %w", err)
+	}
+
+	defer release()
+	proxy.Transport = conn.HTTPTransport()
+
+	return proxy, nil
 }
 
 // Server serves workspace apps endpoints, including:
@@ -522,7 +563,17 @@ func (s *Server) proxyWorkspaceApp(rw http.ResponseWriter, r *http.Request, appT
 	r.URL.Path = path
 	appURL.RawQuery = ""
 
-	proxy := s.AgentProvider.ReverseProxy(appURL, s.DashboardURL, appToken.AgentID)
+	proxy, err := s.AgentProvider.ReverseProxy(appURL, s.DashboardURL, appToken.AgentID)
+	if err != nil {
+		site.RenderStaticErrorPage(rw, r, site.ErrorPageData{
+			Status:       http.StatusBadGateway,
+			Title:        "Bad Gateway",
+			Description:  "Could not connect to workspace agent: " + err.Error(),
+			RetryEnabled: true,
+			DashboardURL: s.DashboardURL.String(),
+		})
+		return
+	}
 
 	proxy.ModifyResponse = func(r *http.Response) error {
 		r.Header.Del(httpmw.AccessControlAllowOriginHeader)
@@ -640,12 +691,13 @@ func (s *Server) workspaceAgentPTY(rw http.ResponseWriter, r *http.Request) {
 
 	go httpapi.Heartbeat(ctx, conn)
 
-	agentConn, err := s.AgentProvider.AgentConn(ctx, appToken.AgentID)
+	agentConn, release, err := s.AgentProvider.AgentConn(ctx, appToken.AgentID)
 	if err != nil {
 		log.Debug(ctx, "dial workspace agent", slog.Error(err))
 		_ = conn.Close(websocket.StatusInternalError, httpapi.WebsocketCloseSprintf("dial workspace agent: %s", err))
 		return
 	}
+	defer release()
 	defer agentConn.Close()
 	log.Debug(ctx, "dialed workspace agent")
 	ptNetConn, err := agentConn.ReconnectingPTY(ctx, reconnect, uint16(height), uint16(width), r.URL.Query().Get("command"))

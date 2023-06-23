@@ -120,6 +120,33 @@ func init() {
 	}
 }
 
+type AgentConn interface {
+	// AwaitReachable waits for the agent to be reachable.
+	AwaitReachable(ctx context.Context) bool
+	// Ping pings the agent and returns the round-trip time.
+	// The bool returns true if the ping was made P2P.
+	Ping(ctx context.Context) (time.Duration, bool, *ipnstate.PingResult, error)
+	// Close ends the connection to the workspace agent.
+	Close() error
+	// ReconnectingPTY spawns a new reconnecting terminal session.
+	// `ReconnectingPTYRequest` should be JSON marshaled and written to the returned net.Conn.
+	// Raw terminal output will be read from the returned net.Conn.
+	ReconnectingPTY(ctx context.Context, id uuid.UUID, height, width uint16, command string) (net.Conn, error)
+	// SSH pipes the SSH protocol over the returned net.Conn.
+	// This connects to the built-in SSH server in the workspace agent.
+	SSH(ctx context.Context) (net.Conn, error)
+	// SSHClient calls SSH to create a client that uses a weak cipher
+	// to improve throughput.
+	SSHClient(ctx context.Context) (*ssh.Client, error)
+	// Speedtest runs a speedtest against the workspace agent.
+	Speedtest(ctx context.Context, direction speedtest.Direction, duration time.Duration) ([]speedtest.Result, error)
+	// DialContext dials the address provided in the workspace agent.
+	// The network must be "tcp" or "udp".
+	DialContext(ctx context.Context, network string, addr string) (net.Conn, error)
+	// ListeningPorts lists the ports that are currently in use by the workspace.
+	ListeningPorts(ctx context.Context) (WorkspaceAgentListeningPortsResponse, error)
+}
+
 func NewWorkspaceAgentConn(conn *tailnet.Conn, opts WorkspaceAgentConnOptions) *WorkspaceAgentConn {
 	return &WorkspaceAgentConn{
 		Conn: conn,
